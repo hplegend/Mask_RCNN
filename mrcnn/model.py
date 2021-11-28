@@ -173,14 +173,26 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
         architecture: Can be resnet50 or resnet101
         stage5: Boolean. If False, stage5 of the network is not created
         train_bn: Boolean. Train or freeze Batch Norm layers
+
+        C1，C2,C3,.....返回结果其实是resnet的各卷积层的输出结果
     """
+    # 这里只支持resnet50和resnet101
     assert architecture in ["resnet50", "resnet101"]
     # Stage 1
+    # 定义网络的层
+
+    # 周围填充3行0和3列0. ZeroPadding2D(1)上下左右
+    # ZeroPadding2D(2,3) 上下2，左右3 ZeroPadding2D((2,3),(4,5)))  上2下3 左4右6
     x = KL.ZeroPadding2D((3, 3))(input_image)
+    # Conv2D 64： 输出数量到底是什么，就是输出的卷积结果数量，卷积核的数量是这个值的倍数； 7*7卷积核大小
     x = KL.Conv2D(64, (7, 7), strides=(2, 2), name='conv1', use_bias=True)(x)
+    # 标准化层
     x = BatchNorm(name='bn_conv1')(x, training=train_bn)
+    # 激活成层，relu，so前面要加一个标准化层
     x = KL.Activation('relu')(x)
+    # 最大池化层
     C1 = x = KL.MaxPooling2D((3, 3), strides=(2, 2), padding="same")(x)
+
     # Stage 2
     x = conv_block(x, 3, [64, 64, 256], stage=2, block='a', strides=(1, 1), train_bn=train_bn)
     x = identity_block(x, 3, [64, 64, 256], stage=2, block='b', train_bn=train_bn)
@@ -1816,9 +1828,9 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 ############################################################
 #  MaskRCNN Class
 ############################################################
-
+# 定义MaskRCNN类
 class MaskRCNN():
-    """Encapsulates the Mask RCNN model functionality.
+    """Encapsulates（封装） the Mask RCNN model functionality.
 
     The actual Keras model is in the keras_model property.
     """
@@ -1835,7 +1847,7 @@ class MaskRCNN():
         self.model_dir = model_dir
         self.set_log_dir()
         self.keras_model = self.build(mode=mode, config=config)
-
+    # 核心的build，build model
     def build(self, mode, config):
         """Build Mask R-CNN architecture.
             input_shape: The shape of the input image.
@@ -1845,6 +1857,7 @@ class MaskRCNN():
         assert mode in ['training', 'inference']
 
         # Image size must be dividable by 2 multiple times
+        # 图像要求：2的6次方
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
@@ -1858,6 +1871,7 @@ class MaskRCNN():
                                     name="input_image_meta")
         if mode == "training":
             # RPN GT
+            # GT ground truth
             input_rpn_match = KL.Input(
                 shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
             input_rpn_bbox = KL.Input(
@@ -1893,6 +1907,8 @@ class MaskRCNN():
         # Bottom-up Layers
         # Returns a list of the last layers of each stage, 5 in total.
         # Don't create the thead (stage 5), so we pick the 4th item in the list.
+        # back bone：resnet：残差网络
+        # 返回的C2，....C5 分别为残差网络各层的输出
         if callable(config.BACKBONE):
             _, C2, C3, C4, C5 = config.BACKBONE(input_image, stage5=True,
                                                 train_bn=config.TRAIN_BN)
@@ -1903,6 +1919,7 @@ class MaskRCNN():
         # TODO: add assert to varify feature map sizes match what's in config
         P5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c5p5')(C5)
         P4 = KL.Add(name="fpn_p4add")([
+            # UpSampling2D 下采样
             KL.UpSampling2D(size=(2, 2), name="fpn_p5upsampled")(P5),
             KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c4p4')(C4)])
         P3 = KL.Add(name="fpn_p3add")([
@@ -1921,6 +1938,7 @@ class MaskRCNN():
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
         # Note that P6 is used in RPN, but not in the classifier heads.
+        # rpc特征map，目的是用于后面的RPN的区域提议网络
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
@@ -1935,6 +1953,7 @@ class MaskRCNN():
         else:
             anchors = input_anchors
 
+        # RPN： 区域提议网络
         # RPN Model
         rpn = build_rpn_model(config.RPN_ANCHOR_STRIDE,
                               len(config.RPN_ANCHOR_RATIOS), config.TOP_DOWN_PYRAMID_SIZE)
@@ -1958,6 +1977,8 @@ class MaskRCNN():
         # and zero padded.
         proposal_count = config.POST_NMS_ROIS_TRAINING if mode == "training"\
             else config.POST_NMS_ROIS_INFERENCE
+
+        # roi生成
         rpn_rois = ProposalLayer(
             proposal_count=proposal_count,
             nms_threshold=config.RPN_NMS_THRESHOLD,
@@ -1985,18 +2006,22 @@ class MaskRCNN():
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
+
+            # 这是rpn层生成的一些可能的类别，box等等
             rois, target_class_ids, target_bbox, target_mask =\
                 DetectionTargetLayer(config, name="proposal_targets")([
                     target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
+            # mask rcnn层，类别和边框的决策（根据rois得到，因此roi是非常重要的，mask rcnn的重点也是aoi align）
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
                 fpn_classifier_graph(rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
                                      train_bn=config.TRAIN_BN,
                                      fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
+            # 预测mask的计算，也根据rois来计算
             mrcnn_mask = build_fpn_mask_graph(rois, mrcnn_feature_maps,
                                               input_image_meta,
                                               config.MASK_POOL_SIZE,
@@ -2007,14 +2032,23 @@ class MaskRCNN():
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
             # Losses
+            # rpn生成的一系列类别的loss
             rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")(
                 [input_rpn_match, rpn_class_logits])
+
+            # rpn生成的一系列box的loss
             rpn_bbox_loss = KL.Lambda(lambda x: rpn_bbox_loss_graph(config, *x), name="rpn_bbox_loss")(
                 [input_rpn_bbox, input_rpn_match, rpn_bbox])
+
+            # mask rcnn生成的类别loss
             class_loss = KL.Lambda(lambda x: mrcnn_class_loss_graph(*x), name="mrcnn_class_loss")(
                 [target_class_ids, mrcnn_class_logits, active_class_ids])
+
+            # mask rcnn生成的boxloss
             bbox_loss = KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x), name="mrcnn_bbox_loss")(
                 [target_bbox, target_class_ids, mrcnn_bbox])
+
+            # mask rcnn生成的mask loss
             mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                 [target_mask, target_class_ids, mrcnn_mask])
 
