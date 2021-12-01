@@ -191,7 +191,8 @@ class Config(object):
         "rpn_bbox_loss": 1.,
         "mrcnn_class_loss": 1.,
         "mrcnn_bbox_loss": 1.,
-        "mrcnn_mask_loss": 1.
+        "mrcnn_mask_loss": 1.,
+        "mrcnn_mask_edge_loss": 1.
     }
 
     # Use RPN ROIs or externally generated ROIs for training
@@ -209,6 +210,15 @@ class Config(object):
 
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0
+
+    # edege loss params
+    EDGE_LOSS_SMOOTHING_PREDICTIONS = False
+    EDGE_LOSS_SMOOTHING_GT = False
+    EDGE_LOSS_SMOOTHING = False
+    EDGE_LOSS_FILTERS = []
+    EDGE_LOSS_NORM = "l2"
+    EDGE_LOSS_WEIGHT_FACTOR = 1.0
+    EDGE_LOSS_WEIGHT_ENTROPY = False
 
     def __init__(self):
         """Set values of computed attributes."""

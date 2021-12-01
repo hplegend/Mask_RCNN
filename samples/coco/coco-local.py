@@ -62,6 +62,7 @@ COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 # through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 DEFAULT_DATASET_YEAR = "2014"
+DEFAULT_DATASET_DIR = os.path.join(ROOT_DIR, 'data/coco')
 
 ############################################################
 #  Configurations
@@ -78,13 +79,18 @@ class CocoConfig(Config):
 
     # We use a GPU with 12GB memory, which can fit two images.
     # Adjust down if you use a smaller GPU.
-    IMAGES_PER_GPU = 2
+    IMAGES_PER_GPU = 1
 
     # Uncomment to train on 8 GPUs (default is 1)
     # GPU_COUNT = 8
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 80  # COCO has 80 classes
+
+    # 用于debug，把数据改小
+    STEPS_PER_EPOCH = 10
+
+    EDGE_LOSS_FILTERS = ['kayyali-senw','laplace']
 
 
 ############################################################
@@ -405,14 +411,15 @@ if __name__ == '__main__':
     parser.add_argument("command",
                         metavar="<command>",
                         help="'train' or 'evaluate' on MS COCO")
-    parser.add_argument('--dataset', required=True,
+    parser.add_argument('--dataset', required=False,
                         metavar="/path/to/coco/",
+                        default=DEFAULT_DATASET_DIR,
                         help='Directory of the MS-COCO dataset')
     parser.add_argument('--year', required=False,
                         default=DEFAULT_DATASET_YEAR,
                         metavar="<year>",
                         help='Year of the MS-COCO dataset (2014 or 2017) (default=2014)')
-    parser.add_argument('--model', required=True,
+    parser.add_argument('--model', required=False,
                         metavar="/path/to/weights.h5",
                         help="Path to weights .h5 file or 'coco'")
     parser.add_argument('--logs', required=False,
@@ -458,20 +465,20 @@ if __name__ == '__main__':
                                   model_dir=args.logs)
 
     # Select weights file to load
-    if args.model.lower() == "coco":
-        model_path = COCO_MODEL_PATH
-    elif args.model.lower() == "last":
-        # Find last trained weights
-        model_path = model.find_last()
-    elif args.model.lower() == "imagenet":
-        # Start from ImageNet trained weights
-        model_path = model.get_imagenet_weights()
-    else:
-        model_path = args.model
-
-    # Load weights
-    print("Loading weights ", model_path)
-    model.load_weights(model_path, by_name=True)
+    # if args.model.lower() == "coco":
+    #     model_path = COCO_MODEL_PATH
+    # elif args.model.lower() == "last":
+    #     # Find last trained weights
+    #     model_path = model.find_last()
+    # elif args.model.lower() == "imagenet":
+    #     # Start from ImageNet trained weights
+    #     model_path = model.get_imagenet_weights()
+    # else:
+    #     model_path = args.model
+    #
+    # # Load weights
+    # print("Loading weights ", model_path)
+    # model.load_weights(model_path, by_name=True)
 
     # Train or evaluate
     if args.command == "train":
