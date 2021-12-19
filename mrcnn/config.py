@@ -67,6 +67,7 @@ class Config(object):
     FPN_CLASSIF_FC_LAYERS_SIZE = 1024
 
     # Size of the top-down layers used to build the feature pyramid
+    # 对特征金字塔的输出特征统一大小
     TOP_DOWN_PYRAMID_SIZE = 256
 
     # Number of classification classes (including background)
@@ -219,6 +220,8 @@ class Config(object):
     EDGE_LOSS_NORM = "l2"
     EDGE_LOSS_WEIGHT_FACTOR = 1.0
     EDGE_LOSS_WEIGHT_ENTROPY = False
+
+    TRAINING_STEP_CHECKPOINTS_SAVE = True
 
     def __init__(self):
         """Set values of computed attributes."""

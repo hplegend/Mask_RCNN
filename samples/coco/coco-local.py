@@ -88,7 +88,7 @@ class CocoConfig(Config):
     NUM_CLASSES = 1 + 80  # COCO has 80 classes
 
     # 用于debug，把数据改小
-    STEPS_PER_EPOCH = 10
+    STEPS_PER_EPOCH = 2
 
     EDGE_LOSS_FILTERS = ['kayyali-senw','laplace']
 
@@ -396,11 +396,13 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
         t_prediction, t_prediction / len(image_ids)))
     print("Total time: ", time.time() - t_start)
 
-
 ############################################################
 #  Training
 ############################################################
 
+from my_callback import MyCallBack
+from checkpoints import  get_last_status
+from checkpoints import  MetaCheckpoint
 
 if __name__ == '__main__':
     import argparse
@@ -456,10 +458,15 @@ if __name__ == '__main__':
         config = InferenceConfig()
     config.display()
 
+    # define call back
+    # my_call_back = MyCallBack('./checkpoints')
+    # model = my_call_back.load_last_model()
+
+    # Training - Stage 1
+
     # Create model
     if args.command == "train":
-        model = modellib.MaskRCNN(mode="training", config=config,
-                                  model_dir=args.logs)
+        model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
     else:
         model = modellib.MaskRCNN(mode="inference", config=config,
                                   model_dir=args.logs)
@@ -501,15 +508,24 @@ if __name__ == '__main__':
         augmentation = imgaug.augmenters.Fliplr(0.5)
 
         # *** This training schedule is an example. Update to your needs ***
-
-        # Training - Stage 1
+        check_file_path = './checkpoints/pointnet.h5'
+        if os.path.exists('./checkpoints/pointnet.h5'):
+            last_epoch, last_meta = get_last_status(model)
+            checkpoint = MetaCheckpoint(check_file_path, monitor='val_acc',
+                                        save_weights_only=True, save_best_only=True,
+                                        verbose=1, meta=last_meta)
+        else:
+            checkpoint = MetaCheckpoint(check_file_path, monitor='val_acc',
+                                        save_weights_only=True, save_best_only=True,
+                                        verbose=1)
         print("Training network heads")
         model.train(dataset_train, dataset_val,
                     learning_rate=config.LEARNING_RATE,
                     epochs=40,
                     layers='heads',
-                    augmentation=augmentation)
-
+                    augmentation=augmentation,
+                    custom_callbacks= [checkpoint])
+        
         # Training - Stage 2
         # Finetune layers from ResNet stage 4 and up
         print("Fine tune Resnet stage 4 and up")

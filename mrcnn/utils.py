@@ -579,7 +579,7 @@ def unmold_mask(mask, bbox, image_shape):
 ############################################################
 #  Anchors
 ############################################################
-
+# 生成候选框的代码
 def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride):
     """
     scales: 1D array of anchor sizes in pixels. Example: [32, 64, 128]
@@ -618,7 +618,7 @@ def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride):
                             box_centers + 0.5 * box_sizes], axis=1)
     return boxes
 
-
+# 根据特征图生成目标候选框 anchors，锚点，就是候选框。 候选框是固定大小的，不一定与目标想匹配，都需要后期进行处理
 def generate_pyramid_anchors(scales, ratios, feature_shapes, feature_strides,
                              anchor_stride):
     """Generate anchors at different levels of a feature pyramid. Each scale
@@ -629,10 +629,13 @@ def generate_pyramid_anchors(scales, ratios, feature_shapes, feature_strides,
     anchors: [N, (y1, x1, y2, x2)]. All generated anchors in one array. Sorted
         with the same order of the given scales. So, anchors of scale[0] come
         first, then anchors of scale[1], and so on.
+        返回在原图的绝对坐标值
     """
     # Anchors
     # [anchor_count, (y1, x1, y2, x2)]
     anchors = []
+    # scales：不同特征图，不同大小比例生成特征图
+    # scales 的大小：32，64，128，256，512
     for i in range(len(scales)):
         anchors.append(generate_anchors(scales[i], ratios, feature_shapes[i],
                                         feature_strides[i], anchor_stride))

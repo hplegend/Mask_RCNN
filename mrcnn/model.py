@@ -174,7 +174,8 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
         stage5: Boolean. If False, stage5 of the network is not created
         train_bn: Boolean. Train or freeze Batch Norm layers
 
-        C1，C2,C3,.....返回结果其实是resnet的各卷积层的输出结果
+        C1，C2,C3,.....返回结果其实是resnet的各卷积层的输出结果。这个结果实际上就是特征图。
+        越往后移动，每一个阶段的特征图大小越来越小，特征图数量越来越多。
     """
     # 这里只支持resnet50和resnet101
     assert architecture in ["resnet50", "resnet101"]
@@ -222,6 +223,7 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
 #  Proposal Layer
 ############################################################
 
+# 候选框调整
 def apply_box_deltas_graph(boxes, deltas):
     """Applies the given deltas to the given boxes.
     boxes: [N, (y1, x1, y2, x2)] boxes to update
@@ -245,7 +247,7 @@ def apply_box_deltas_graph(boxes, deltas):
     result = tf.stack([y1, x1, y2, x2], axis=1, name="apply_box_deltas_out")
     return result
 
-
+# 越界的裁剪掉
 def clip_boxes_graph(boxes, window):
     """
     boxes: [N, (y1, x1, y2, x2)]
@@ -285,8 +287,10 @@ class ProposalLayer(KE.Layer):
         self.proposal_count = proposal_count
         self.nms_threshold = nms_threshold
 
+    # call back，回调：制动执行的入口函数
     def call(self, inputs):
         # Box Scores. Use the foreground class confidence. [Batch, num_rois, 1]
+        # rpn层的得分值
         scores = inputs[0][:, :, 1]
         # Box deltas [batch, num_rois, 4]
         deltas = inputs[1]
@@ -309,6 +313,7 @@ class ProposalLayer(KE.Layer):
 
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]
+        # 候选框微调整
         boxes = utils.batch_slice([pre_nms_anchors, deltas],
                                   lambda x, y: apply_box_deltas_graph(x, y),
                                   self.config.IMAGES_PER_GPU,
@@ -328,6 +333,7 @@ class ProposalLayer(KE.Layer):
 
         # Non-max suppression
         def nms(boxes, scores):
+            #
             indices = tf.image.non_max_suppression(
                 boxes, scores, self.proposal_count,
                 self.nms_threshold, name="rpn_non_max_suppression")
@@ -494,7 +500,15 @@ def overlaps_graph(boxes1, boxes2):
     overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])
     return overlaps
 
-
+# 1、从rpn-rios 剔除pad 无效数据
+# 2、一个框，有多个目标或者类型，剔除掉
+# 3、判断正负样本，基于ROI和GT，计算IOU与默认得0.5来判断。 IOU就是候选框与真实得交集大小，正常而言就是越大越好。
+# 4
+# 5 多类别，需要得到与其他类型得IOU，用最大得
+# 6 与真实得偏移
+# 7 与真实GT mask
+# 8
+# 9
 def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
@@ -535,6 +549,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
     # them from training. A crowd box is given a negative class ID.
+    # 处理重叠
     crowd_ix = tf.where(gt_class_ids < 0)[:, 0]
     non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
     crowd_boxes = tf.gather(gt_boxes, crowd_ix)
@@ -543,6 +558,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
     # Compute overlaps matrix [proposals, gt_boxes]
+    # proposal ROI与gt的比较
     overlaps = overlaps_graph(proposals, gt_boxes)
 
     # Compute overlaps with crowd boxes [proposals, crowd_boxes]
@@ -628,6 +644,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
     masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
 
+    # rio,类别，偏移量，mask
     return rois, roi_gt_class_ids, deltas, masks
 
 
@@ -856,19 +873,23 @@ def rpn_graph(feature_map, anchors_per_location, anchor_stride):
     # TODO: check if stride of 2 causes alignment issues if the feature map
     # is not even.
     # Shared convolutional base of the RPN
+    # 共享卷积：没有啥特别的，就是大家都用这个卷积层处理。
     shared = KL.Conv2D(512, (3, 3), padding='same', activation='relu',
                        strides=anchor_stride,
                        name='rpn_conv_shared')(feature_map)
 
     # Anchor Score. [batch, height, width, anchors per location * 2].
+    # 2* ，2表示前景和背景
     x = KL.Conv2D(2 * anchors_per_location, (1, 1), padding='valid',
                   activation='linear', name='rpn_class_raw')(shared)
 
     # Reshape to [batch, anchors, 2]
+    # 得分，score
     rpn_class_logits = KL.Lambda(
         lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))(x)
 
     # Softmax on last dimension of BG/FG.
+    # 概率：分类 sofamax，每一个类型的概率
     rpn_probs = KL.Activation(
         "softmax", name="rpn_class_xxx")(rpn_class_logits)
 
@@ -933,6 +954,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     """
     # ROI Pooling
     # Shape: [batch, num_rois, POOL_SIZE, POOL_SIZE, channels]
+    # 当前的ROI来源于哪个层？
     x = PyramidROIAlign([pool_size, pool_size],
                         name="roi_align_classifier")([rois, image_meta] + feature_maps)
     # Two 1024 FC layers (implemented with Conv2D for consistency)
@@ -949,6 +971,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
                        name="pool_squeeze")(x)
 
     # Classifier head
+    # Dense 就是全连接层。 把二维变成一维
     mrcnn_class_logits = KL.TimeDistributed(KL.Dense(num_classes),
                                             name='mrcnn_class_logits')(shared)
     mrcnn_probs = KL.TimeDistributed(KL.Activation("softmax"),
@@ -1009,11 +1032,12 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
     x = KL.TimeDistributed(BatchNorm(),
                            name='mrcnn_mask_bn4')(x, training=train_bn)
     x = KL.Activation('relu')(x)
-
+    # 反卷积：
     x = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"),
                            name="mrcnn_mask_deconv")(x)
     x = KL.TimeDistributed(KL.Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"),
                            name="mrcnn_mask")(x)
+    # 图像大小，返回类型
     return x
 
 
@@ -2004,14 +2028,16 @@ class MaskRCNN():
                             "to avoid fractions when downscaling and upscaling."
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
-        # Inputs
+        # Inputs， X输入
         input_image = KL.Input(
             shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
+
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
         if mode == "training":
             # RPN GT
             # GT ground truth
+            # 在training过程中，我们有5个loss，因此这里有5个标签，主要用于计算loss。
             input_rpn_match = KL.Input(
                 shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
             input_rpn_bbox = KL.Input(
@@ -2057,9 +2083,14 @@ class MaskRCNN():
                                              stage5=True, train_bn=config.TRAIN_BN)
         # Top-down Layers
         # TODO: add assert to varify feature map sizes match what's in config
+        # config.TOP_DOWN_PYRAMID_SIZE 卷积的输出通道数目； （1，1）是卷积核的大小。 （C5书该层卷积的输入）
+        # P5 的结果是64*64*256. 要注意 config.TOP_DOWN_PYRAMID_SIZE是输出的特征图的数量，不是大小。
         P5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c5p5')(C5)
+
+        # 上采样，然后相加（这里相加就是融合）
         P4 = KL.Add(name="fpn_p4add")([
-            # UpSampling2D 下采样
+            # UpSampling2D 上采样。P5不就是256*256，C4也是256呀？为啥还要上采样
+            # c4 是64*64*1024。上采样，让后相加，就是特征融合
             KL.UpSampling2D(size=(2, 2), name="fpn_p5upsampled")(P5),
             KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c4p4')(C4)])
         P3 = KL.Add(name="fpn_p3add")([
@@ -2069,16 +2100,20 @@ class MaskRCNN():
             KL.UpSampling2D(size=(2, 2), name="fpn_p3upsampled")(P3),
             KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c2p2')(C2)])
         # Attach 3x3 conv to all P layers to get the final feature maps.
+        # 融合的特征，在加一层卷积。
         P2 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")(P2)
         P3 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p3")(P3)
         P4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p4")(P4)
         P5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p5")(P5)
         # P6 is used for the 5th anchor scale in RPN. Generated by
         # subsampling from P5 with stride of 2.
+        # p6区域框的生成
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
         # Note that P6 is used in RPN, but not in the classifier heads.
-        # rpc特征map，目的是用于后面的RPN的区域提议网络
+        # rpn特征map，目的是用于后面的RPN的区域提议网络
+        # rpn层的作用是生成框
+        # feature maps
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
@@ -2110,6 +2145,7 @@ class MaskRCNN():
         outputs = [KL.Concatenate(axis=1, name=n)(list(o))
                    for o, n in zip(outputs, output_names)]
 
+        # rpn的结果
         rpn_class_logits, rpn_class, rpn_bbox = outputs
 
         # Generate proposals
@@ -2119,6 +2155,8 @@ class MaskRCNN():
             else config.POST_NMS_ROIS_INFERENCE
 
         # roi生成
+        # 建议层
+        # 返回得结果是rpn rois，就是从20多万得候选框中挑选得一些种子框
         rpn_rois = ProposalLayer(
             proposal_count=proposal_count,
             nms_threshold=config.RPN_NMS_THRESHOLD,
@@ -2148,11 +2186,13 @@ class MaskRCNN():
             # padded. Equally, returned rois and targets are zero padded.
 
             # 这是rpn层生成的一些可能的类别，box等等。DetectionTargetLayer实际上是再构造对象，同时调用call。call可以类比与构造函数？
+            # detection
             rois, target_class_ids, target_bbox, target_mask =\
                 DetectionTargetLayer(config, name="proposal_targets")([
                     target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             # Network Heads
+            # 得到结果部分。
             # TODO: verify that this handles zero padded ROIs
             # mask rcnn层，类别和边框的决策（根据rois得到，因此roi是非常重要的，mask rcnn的重点也是aoi align）
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
@@ -2524,13 +2564,15 @@ class MaskRCNN():
             os.makedirs(self.log_dir)
 
         # Callbacks
+        # 改进callBack
         callbacks = [
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
                                         histogram_freq=0, write_graph=True, write_images=False),
-            keras.callbacks.ModelCheckpoint(self.checkpoint_path,
-                                            verbose=0, save_weights_only=True),
         ]
 
+        if self.config.TRAINING_STEP_CHECKPOINTS_SAVE:
+            callbacks += keras.callbacks.ModelCheckpoint(self.checkpoint_path, verbose=0, save_weights_only=True),
+        
         # Add custom callbacks to the list
         if custom_callbacks:
             callbacks += custom_callbacks
@@ -2539,6 +2581,7 @@ class MaskRCNN():
         log("\nStarting at epoch {}. LR={}\n".format(self.epoch, learning_rate))
         log("Checkpoint Path: {}".format(self.checkpoint_path))
         self.set_trainable(layers)
+        # compile，设置反向传播优化器
         self.compile(learning_rate, self.config.LEARNING_MOMENTUM)
 
         # Work-around for Windows: Keras fails on Windows when using
@@ -2549,6 +2592,7 @@ class MaskRCNN():
         else:
             workers = multiprocessing.cpu_count()
 
+        # fit: 开始真正训练的代码
         self.keras_model.fit_generator(
             train_generator,
             initial_epoch=self.epoch,
@@ -2800,6 +2844,7 @@ class MaskRCNN():
             # Keep a copy of the latest anchors in pixel coordinates because
             # it's used in inspect_model notebooks.
             # TODO: Remove this after the notebook are refactored to not use it
+            # 几十万个候选框
             self.anchors = a
             # Normalize coordinates
             self._anchor_cache[tuple(image_shape)] = utils.norm_boxes(a, image_shape[:2])
