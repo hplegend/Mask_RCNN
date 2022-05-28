@@ -176,6 +176,7 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
 
         C1，C2,C3,.....返回结果其实是resnet的各卷积层的输出结果。这个结果实际上就是特征图。
         越往后移动，每一个阶段的特征图大小越来越小，特征图数量越来越多。
+        残差网络的核心是做特征提取，生成feature map
     """
     # 这里只支持resnet50和resnet101
     assert architecture in ["resnet50", "resnet101"]
@@ -972,6 +973,8 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
 
     # Classifier head
     # Dense 就是全连接层。 把二维变成一维
+    # 只在分类的时候用到了dense层
+    # TimeDistributed 是一种实现技巧
     mrcnn_class_logits = KL.TimeDistributed(KL.Dense(num_classes),
                                             name='mrcnn_class_logits')(shared)
     mrcnn_probs = KL.TimeDistributed(KL.Activation("softmax"),
@@ -2195,6 +2198,7 @@ class MaskRCNN():
             # 得到结果部分。
             # TODO: verify that this handles zero padded ROIs
             # mask rcnn层，类别和边框的决策（根据rois得到，因此roi是非常重要的，mask rcnn的重点也是aoi align）
+            # dense层只在分类中使用到了
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
                 fpn_classifier_graph(rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
@@ -2752,6 +2756,7 @@ class MaskRCNN():
             log("image_metas", image_metas)
             log("anchors", anchors)
         # Run object detection
+        # detect 就是predicate
         detections, _, _, mrcnn_mask, _, _, _ =\
             self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
         # Process detections
@@ -2828,7 +2833,9 @@ class MaskRCNN():
         return results
 
     def get_anchors(self, image_shape):
-        """Returns anchor pyramid for the given image size."""
+        """Returns anchor pyramid for the given image size.
+           backbone到底是啥意思呢？ backbone通常背成为主干网络，主要代指特征提取网络
+        """
         backbone_shapes = compute_backbone_shapes(self.config, image_shape)
         # Cache anchors and reuse if image shape is the same
         if not hasattr(self, "_anchor_cache"):

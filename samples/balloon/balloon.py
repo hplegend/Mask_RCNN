@@ -193,6 +193,7 @@ def train(model):
     # COCO trained weights, we don't need to train too long. Also,
     # no need to train all layers, just the heads should do it.
     print("Training network heads")
+    # model.train 是maskrcnn提供的风筝好的方法。原始的keras模型的方法叫fit。跟进代码也会发现，maskrcnn实际上用的就是fit方法
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
                 epochs=30,
